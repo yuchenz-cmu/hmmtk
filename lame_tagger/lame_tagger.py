@@ -29,9 +29,67 @@ def log_add(left, right):
     else:
         return left + M_LN2
 
+# training the hmm using forward-backward algorithm
+def train_unsupervised(train_file, model_file):
+    ftrain = open(train_file, 'r')
+    
+    vocab = dict()
+    tags = dict()
+    all_ob_seqs = list()
+    
+    # first gathering the vocab and tags
+    for line in ftrain:
+        line = line.replace("\n", "")
+        line = line.replace("\r", "")
+        tokens = line.split(" ")
+        
+        ob_list = list()
+        for t in tokens:
+            last_idx = t.rfind("_")
+            curr_word = t[:last_idx]
+            curr_tag = t[last_idx + 1:]
+            
+            if (curr_word not in vocab):
+                vocab[curr_word] = 1
+            else:
+                vocab[curr_word] += 1
+            
+            ob_list.append(curr_word)
+            
+            if (curr_tag not in tags):
+                tags[curr_tag] = 1
+            else:
+                tags[curr_tag] += 1
+        
+        all_ob_seqs.append(ob_list)
+
+    
+    # initialize HMM with tags as states and words as observations, and randomzied probs
+    train_hmm = hmm.HMM(states = tags.keys(), observations = vocab.keys())
+    train_hmm.randomize_matrices()
+    
+    # starts training
+    # train_hmm.train(ob_list, max_iteration = 1000)
+    train_hmm.train_multiple(all_ob_seqs, max_iteration = 1000)        
+    
+    # get prior for each tag
+    total_tags = sum([tags[x] for x in tags])
+    for t in tags:
+        tags[t] = ln(float(tags[t]) / float(total_tags))
+    
+    fmodel = open(model_file, 'w')
+    hmm_model = (train_hmm.get_states(), 
+                 train_hmm.get_observations(), 
+                 train_hmm.get_initial_matrix(), 
+                 train_hmm.get_transition_matrix(), 
+                 train_hmm.get_emission_matrix())    
+    
+    pickle.dump((hmm_model, tags), fmodel)
+    fmodel.close()
+
 # assume train_file is tagged following the Stanford POS tagger's convention:
 # WORD_TAG
-def train(train_file, model_file):
+def train_supervised(train_file, model_file):
     ftrain = open(train_file, 'r')
     
     vocab = dict()
@@ -90,12 +148,13 @@ def train(train_file, model_file):
     for tag in tags:
         sys.stderr.write("%s "%(tag))
         if (tag not in tag_bigram['NULL']):
-            prob = 0.0
+            count = 1
+            total_sum += 1
         else:
-            prob = float(tag_bigram['NULL'][tag]) / float(total_sum)
-        
+            count = tag_bigram['NULL'][tag]
+            
+        prob = float(count) / float(total_sum)        
         Pi_matrix[tag] = ln(prob)
-    
     
     # A matrix
     sys.stderr.write("\n\nComputing the A matrix ... \n")
@@ -107,9 +166,12 @@ def train(train_file, model_file):
             
         for curr_tag in tags:
             if (curr_tag not in tag_bigram[prev_tag]):
-                prob = 0.0
+                count = 1
+                total_sum += 1
             else:
-                prob = float(tag_bigram[prev_tag][curr_tag]) / float(total_sum)
+                count = tag_bigram[prev_tag][curr_tag]
+                
+            prob = float(count) / float(total_sum)
             
             A_matrix[prev_tag][curr_tag] = ln(prob)
             
@@ -123,9 +185,12 @@ def train(train_file, model_file):
         
         for word in vocab:
             if (word not in word_given_tag[tag]):
-                prob = 0.0
+                count = 1
+                total_sum += 1
             else:
-                prob = float(word_given_tag[tag][word]) / float(total_sum)
+                count = word_given_tag[tag][word]
+                
+            prob = float(count) / float(total_sum)
             B_matrix[tag][word] = ln(prob)
     
     sys.stderr.write("\n\n")
@@ -225,7 +290,9 @@ def tag_file(target_file, hmm_model, prior):
         if (tag_seq is not None):
             for i in xrange(0, len(tokens)):
                 sys.stdout.write("%s_%s "%(tokens[i], tag_seq[i]))
-        print
+                sys.stderr.write("%s_%s "%(tokens[i], tag_seq[i]))
+        sys.stdout.write("\n")
+        sys.stderr.write("\n")
         
     ftarget.close()
 
@@ -243,12 +310,13 @@ def main():
     while (idx < len(sys.argv)):
         if (sys.argv[idx].lower() == '--train'):
             if (idx + 2 >= len(sys.argv)):
-                sys.stderr.write("Must specify train file and model file.\n")
+                sys.stderr.write("Must specify train_manual file and model file.\n")
                 print_usage()
                 return 2
             train_file = sys.argv[idx + 1]
             model_file = sys.argv[idx + 2]
-            train(train_file, model_file)
+            # train_supervised(train_file, model_file)
+            train_unsupervised(train_file, model_file)
             break
         
         elif (sys.argv[idx].lower() == '--tag'):
