@@ -1,6 +1,8 @@
 # hmmtk/hmm.py - HMM (Hidden Markov Model) implementation written in Python 
 # First version author: Yuchen Zhang (yuchenz@cs.cmu.edu)
 # Version history:
+# 
+# Dec 28, 2012, 0.1.1 - Added support for training on multiple instances
 # Dec 27, 2012, 0.1.0 - initial version
 # 
 # You may distribute this software freely. 
@@ -42,7 +44,7 @@ class HMM:
             self.set_emission_matrix(emit_matrix)
 
     # calculate log(exp(left) + exp(right)) more accurately
-    # based on http://www.cs.cmu.edu/~roni/11761-s12/assignments/__log_add.c
+    # based on http://www.cs.cmu.edu/~roni/11761-s12/assignments/log_add.c
     def __log_add(self, left, right):
         if (right < left):
             return left + math.log1p(math.exp(right - left))
@@ -77,6 +79,7 @@ class HMM:
                 i = 0
                 viterbi_t_j = self.NEG_INF
                 curr_best_st = None
+                  
                 while (i < N): # calculate alpha_t_j
                     st_i = self.st_list[i]
                     log_sum = viterbi_table[t - 1][st_i] + self.trans_matrix[st_i][st_j] + self.emit_matrix[st_j][ot]
@@ -85,7 +88,9 @@ class HMM:
                         viterbi_t_j = log_sum
                         curr_best_st = st_i
                     i += 1
-                    
+#                Slow, do not use. Premature optimization is the root of all evil. 
+#                (curr_best_st, viterbi_t_j) = max(map(lambda st_i:(st_i, viterbi_table[t - 1][st_i] + self.trans_matrix[st_i][st_j] + self.emit_matrix[st_j][ot]), self.st_list), key=lambda x:x[1])
+              
                 viterbi_t[st_j] = viterbi_t_j
                 bp_t[st_j] = curr_best_st
                 j += 1
@@ -123,6 +128,7 @@ class HMM:
         
         t = 1
         while (t <= len(ob_seq)): # loop through time
+            # sys.stderr.write("\rComputing alpha table t = %d out of %d"%(t, len(ob_seq)))            
             alpha_t = dict()
             ot = ob_seq[t - 1]   # this is t - 1 because t0 is start state
             j = 0
@@ -172,6 +178,7 @@ class HMM:
         
         t = len(ob_seq) - 1 # starting from 2nd to last and move backwards
         while (t >= 0):
+            # sys.stderr.write("\rComputing beta table t = %d out of %d"%(t, len(ob_seq)))            
             ot_next = ob_seq[t]
             i = 0
             while (i < N):
@@ -214,6 +221,51 @@ class HMM:
 
     # train the HMM using forward-backward algorithm, stops when the differences 
     # between likelihoods is smaller than delta, or reaches maximum iteration
+    def train_multiple(self, ob_seq_list, max_iteration = 100, delta = 0.000001):
+        if (max_iteration < 1):
+            return None
+
+        iteration = 0
+        prev_avg_ll = self.NEG_INF
+        
+        while (iteration < max_iteration):
+            alpha_table_list = list()
+            beta_table_list = list()
+            ob_seq_num = len(ob_seq_list)
+            
+            avg_ll = self.NEG_INF
+            for k in xrange(0, ob_seq_num):
+                sys.stderr.write("\rComputing Alpha and Beta tables for observation %d of %d ... "%(k, ob_seq_num))
+                ob_seq = ob_seq_list[k]
+                alpha_table = self.forward(ob_seq)
+                beta_table = self.backward(ob_seq)
+                
+                alpha_table_list.append(alpha_table)
+                beta_table_list.append(beta_table)
+                
+                avg_ll = self.__log_add(avg_ll, self.__get_avgll_by_alpha(alpha_table, ob_seq))
+            avg_ll -= self.__ln(ob_seq_num)
+            
+            (init_matrix_new, trans_matrix_new, emit_matrix_new) = self.forward_backward_multiple(ob_seq_list, alpha_table_list, beta_table_list)
+            self.init_matrix = init_matrix_new
+            self.trans_matrix = trans_matrix_new
+            self.emit_matrix = emit_matrix_new
+            
+            sys.stderr.write("Iteration %d, average likelihood: %.10f\n"%(iteration, avg_ll))
+            if (avg_ll - prev_avg_ll < delta):
+                break
+            
+            if (avg_ll < prev_avg_ll):
+                sys.stderr.write("Something wrong ... \n")
+                return False
+            
+            prev_avg_ll = avg_ll            
+            iteration += 1
+        
+        return True
+
+    # train the HMM using forward-backward algorithm, stops when the differences 
+    # between likelihoods is smaller than delta, or reaches maximum iteration
     def train(self, ob_seq, max_iteration = 100, delta = 0.000001):
         if (max_iteration < 1):
             return None
@@ -243,6 +295,80 @@ class HMM:
             iteration += 1
         
         return True
+
+    # forward-backward algorithm with multiple training instances, following 
+    # the assumption that each training example are statistically independent
+    def forward_backward_multiple(self, ob_seq_list, alpha_table_list, beta_table_list):
+        trans_matrix_new = dict()
+        emit_matrix_new = dict()
+        init_matrix_new = dict()
+        N = len(self.st_list)
+        
+        Xi_table_list = list()
+        gamma_table_list = list()
+        
+        k = 0
+        while (k < len(ob_seq_list)):
+            sys.stderr.write("\rComputing Xi and gamma tables for observation %d of %d ..."%(k, len(ob_seq_list)))
+            ob_seq = ob_seq_list[k]
+            alpha_table = alpha_table_list[k]
+            beta_table = beta_table_list[k]
+            # first compute Xi_table[t][i][j] and gamma_table[t][i]
+            # sys.stderr.write("Calculating __Xi, gamma tables ... \n")
+            Xi_table = list()
+            gamma_table = list()
+            t = 0
+            while (t < len(ob_seq) - 1):
+                i = 0
+                Xi_t = dict()
+                gamma_t = dict()
+                while (i < N):
+                    st_i = self.st_list[i]
+                    Xi_t_i = dict()
+                    gamma_t_i = self.__ln(0.0)
+                    j = 0
+                    
+                    while (j < N):
+                        st_j = self.st_list[j]
+                        Xi_t_i_j = self.__Xi(st_i, st_j, t, ob_seq, alpha_table, beta_table)
+                        Xi_t_i[st_j] = Xi_t_i_j
+                        gamma_t_i = self.__log_add(gamma_t_i, Xi_t_i_j)
+                        j += 1
+                        
+                    Xi_t[st_i] = Xi_t_i
+                    gamma_t[st_i] = gamma_t_i
+                    i += 1
+                    
+                Xi_table.append(Xi_t)
+                gamma_table.append(gamma_t)
+                t += 1
+            Xi_table_list.append(Xi_table)
+            gamma_table_list.append(gamma_table)
+            k += 1
+        
+        # sys.stderr.write("Computing new values for init_matrix ... \n")
+        for st_i in self.st_list:
+            init_st_i = self.NEG_INF
+            ob_seq_num = len(ob_seq_list)
+            for k in xrange(0, ob_seq_num):
+                init_st_i = self.__log_add(init_st_i, gamma_table_list[k][0][st_i])
+                # init_matrix_new[st_i] = gamma_table[0][st_i]
+            init_st_i -= self.__ln(ob_seq_num)
+            init_matrix_new[st_i] = init_st_i
+        
+        # sys.stderr.write("Computing new values for trans_matrix ... \n")
+        for st_i in self.st_list:
+            trans_matrix_new[st_i] = dict()
+            for st_j in self.st_list:
+                trans_matrix_new[st_i][st_j] = self.__trans_prime_multiple(st_i, st_j, Xi_table_list, gamma_table_list, ob_seq_list)
+        
+        # sys.stderr.write("Computing new values for emit_matrix ... \n")
+        for st_j in self.st_list:
+            emit_matrix_new[st_j] = dict()
+            for vk in self.ob_list:
+                emit_matrix_new[st_j][vk] = self.__emit_prime_multiple(st_j, vk, Xi_table_list, gamma_table_list, ob_seq_list)
+
+        return (init_matrix_new, trans_matrix_new, emit_matrix_new)
 
     # forward_backword algorithm for training
     def forward_backward(self, ob_seq, alpha_table, beta_table):
@@ -298,6 +424,40 @@ class HMM:
                 emit_matrix_new[st_j][vk] = self.__emit_prime(st_j, vk, Xi_table, gamma_table, ob_seq)
 
         return (init_matrix_new, trans_matrix_new, emit_matrix_new)
+
+    # computes the new trans[st_i][st_j] based on the __Xi table and gamma table
+    def __trans_prime_multiple(self, st_i, st_j, Xi_table_list, gamma_table_list, ob_seq_list):
+        numerator = self.__ln(0.0)
+        denominator = self.__ln(0.0)
+        
+        for k in xrange(0, len(ob_seq_list)):
+            Xi_table = Xi_table_list[k]
+            gamma_table = gamma_table_list[k]
+            ob_seq = ob_seq_list[k]
+            t = 0
+            while (t < len(ob_seq) - 1):
+                numerator = self.__log_add(numerator, Xi_table[t][st_i][st_j])
+                denominator = self.__log_add(denominator, gamma_table[t][st_i])
+                t += 1
+        
+        return (numerator - denominator)
+    
+    # computes the new emit[st_i][vk] based on __Xi table and gamma table
+    def __emit_prime_multiple(self, st_j, vk, Xi_table_list, gamma_table_list, ob_seq_list):
+        numerator = self.__ln(0.0)
+        denominator = self.__ln(0.0)
+        
+        for k in xrange(0, len(ob_seq_list)):
+            gamma_table = gamma_table_list[k]
+            ob_seq = ob_seq_list[k]
+            t = 0
+            while (t < len(ob_seq) - 1):
+                if (ob_seq[t] == vk):
+                    numerator = self.__log_add(numerator, gamma_table[t][st_j])
+                denominator = self.__log_add(denominator, gamma_table[t][st_j])
+                t += 1
+        
+        return (numerator - denominator)
     
     # computes the new trans[st_i][st_j] based on the __Xi table and gamma table
     def __trans_prime(self, st_i, st_j, Xi_table, gamma_table, ob_seq):
@@ -407,9 +567,7 @@ class HMM:
     
     # get a list of random numbers
     def __get_rand_list(self, list_len, sum_to_one = True, take_ln = True):
-        result_list = [None] * list_len
-        for i in xrange(0, len(result_list)):
-            result_list[i] = random.random()
+        result_list = [random.random() for i in xrange(0, list_len)]
         
         if (sum_to_one):
             list_sum = sum(result_list)
