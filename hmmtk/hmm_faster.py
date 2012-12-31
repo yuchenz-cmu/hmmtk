@@ -88,8 +88,8 @@ class HMM:
         N = len(self.st_list)
         ob_seq_len = len(ob_seq)
         
-        viterbi_table = [[self.NEG_INF for st in xrange(N)] for t in ob_seq_len]
-        bp_table = [[self.NEG_INF for st in xrange(N)] for t in ob_seq_len]
+        viterbi_table = [[self.NEG_INF for st in xrange(N)] for t in xrange(ob_seq_len)]
+        bp_table = [[self.NEG_INF for st in xrange(N)] for t in xrange(ob_seq_len)]
         ob_seq_int = [self.ob_list_index[ob] for ob in ob_seq]
 
         # initialize viterbi table's first entry
@@ -314,6 +314,61 @@ class HMM:
         
         return (numerator - denominator)
     
+    # add a single state to HMM
+    def add_state(self, st):
+        self.st_list.append(st)
+        self.st_list_index[st] = len(self.st_list) - 1
+        
+        N = len(self.st_list)
+        ob_list_len = len(self.ob_list)
+        self.init_matrix.append(self.NEG_INF)
+        self.init_matrix_copy.append(self.NEG_INF)
+        self.trans_matrix.append([self.NEG_INF for x in xrange(N)])
+        self.trans_matrix_copy.append([self.NEG_INF for x in xrange(N)])
+        self.emit_matrix.append([self.NEG_INF for x in xrange(ob_list_len)])
+        self.emit_matrix_copy.append([self.NEG_INF for x in xrange(ob_list_len)])
+    
+    # remove a state from HMM
+    def remove_state(self, st):
+        st_idx = self.st_list_index[st]
+        del self.st_list[self.st_list_index[st]]
+        del self.st_list_index[st]
+        
+        del self.init_matrix[st_idx]
+        del self.init_matrix_copy[st_idx]
+        
+        del self.trans_matrix[st_idx]
+        for item in self.init_matrix:
+            del item[st_idx]
+        del self.trans_matrix_copy[st_idx]
+        for item in self.init_matrix_copy:
+            del item[st_idx]
+        
+        del self.emit_matrix[st_idx]
+        del self.emit_matrix_copy[st_idx]
+        
+    
+    # add an observation to HMM
+    def add_observation(self, ob):
+        self.ob_list.append(ob)
+        self.ob_list_index[ob] = len(self.ob_list) - 1
+
+        N = len(self.st_list)
+        for st in xrange(N):
+            self.emit_matrix[st].append(self.NEG_INF)
+            self.emit_matrix_copy[st].append(self.NEG_INF)            
+    
+    # remove an observation from HMM
+    def remove_observation(self, ob):
+        ob_idx = self.ob_list_index[ob]
+        del self.ob_list[ob_idx]
+        del self.ob_list_index[ob]
+        
+        N = len(self.st_list)
+        for st in xrange(N):
+            del self.emit_matrix[st][ob_idx]
+            del self.emit_matrix_copy[st][ob_idx]
+    
     # set the list of states
     def set_states(self, st_seq):
         self.st_list = copy.copy(st_seq)
@@ -348,17 +403,16 @@ class HMM:
     
     # set the transition probability from state[i] to state[j]
     def set_transition(self, st_from, st_to, prob):
+        if (st_from not in self.st_list_index):
+            self.add_state(st_from)
+        
+        if (st_to not in self.st_list_index):
+            self.add_state(st_to)
+        
         self.trans_matrix[self.st_list_index[st_from]][self.st_list_index[st_to]] = prob
     
     # set the transition probability matrix, P(state[i] -> state[j]) = A[i][j]
     def set_transition_matrix(self, A_matrix):
-#        self.trans_matrix = copy.copy(A_matrix)
-#        for from_st in self.st_list:
-#            if (from_st not in self.trans_matrix):
-#                self.trans_matrix[from_st] = dict()
-#            for to_st in self.st_list:
-#                if (to_st not in self.trans_matrix[from_st]):
-#                    self.trans_matrix[from_st][to_st] = self.__ln(0.0)
         ln_0 = self.__ln(0.0)
         N = len(self.st_list)
         self.trans_matrix = [[ln_0 for st_i in xrange(N)]  for st_j in xrange(N)]
@@ -367,26 +421,24 @@ class HMM:
         for st_i in A_matrix:
             for st_j in A_matrix[st_i]:
                 self.trans_matrix[self.st_list_index[st_i]][self.st_list_index[st_j]] = A_matrix[st_i][st_j]
-        
     
     # set the probability of emitting observation[ob] at state[st]
     def set_emission(self, st, ob, prob):
+        if (st not in self.st_list_index):
+            self.add_state(st)
+        
+        if (ob not in self.ob_list_index):
+            self.add_observation(ob)
+
         self.emit_matrix[self.st_list_index[st]][self.ob_list_index[ob]] = prob
     
     # set the emission probability matrix
     def set_emission_matrix(self, B_matrix):
-#        self.emit_matrix = copy.copy(B_matrix)
-#        for st in self.st_list:
-#            if (st not in self.emit_matrix):
-#                self.emit_matrix[st] = dict()
-#            for ob in self.ob_list:
-#                if (ob not in self.emit_matrix[st]):
-#                    self.emit_matrix[st][ob] = self.__ln(0.0)
         N = len(self.st_list)
         ob_list_len = len(self.ob_list)
         ln_0 = self.__ln(0.0)
-        self.emit_matrix = [[ln_0 for st in xrange(N)] for ob in xrange(ob_list_len)]
-        self.emit_matrix_copy = [[ln_0 for st in xrange(N)] for ob in xrange(ob_list_len)]
+        self.emit_matrix = [[ln_0 for st in xrange(ob_list_len)] for ob in xrange(N)]
+        self.emit_matrix_copy = [[ln_0 for st in xrange(ob_list_len)] for ob in xrange(N)]
         
         for st in B_matrix:
             for ob in B_matrix[st]:
@@ -498,10 +550,12 @@ class HMM:
             init_matrix_dict[self.st_list[st]] = self.init_matrix[st]
         
         for st_i in xrange(len(self.st_list)):
+            trans_matrix_dict[self.st_list[st_i]] = dict()
             for st_j in xrange(len(self.st_list)):
                 trans_matrix_dict[self.st_list[st_i]][self.st_list[st_j]] = self.trans_matrix[st_i][st_j]
         
         for st in xrange(len(self.st_list)):
+            emit_matrix_dict[self.st_list[st]] = dict()
             for ob in xrange(len(self.ob_list)):
                 emit_matrix_dict[self.st_list[st]][self.ob_list[ob]] = self.emit_matrix[st][ob]
         

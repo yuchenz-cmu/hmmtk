@@ -272,14 +272,22 @@ def tag_string(target_str, hmm_model, prior_dict):
     
     # normalize the emission matrix for the hmm
     emit_matrix = hmm_model.get_emission_matrix()
-    for tag in emit_matrix:
+    for st in xrange(len(emit_matrix)):
         log_sum = NEG_INF
-        for w in emit_matrix[tag]:
-            log_sum = log_add(log_sum, emit_matrix[tag][w])
+        for ob in xrange(len(emit_matrix[st])):
+            log_sum = log_add(log_sum, emit_matrix[st][ob])
         
-        for w in emit_matrix[tag]:
-            emit_matrix[tag][w] = emit_matrix[tag][w] - log_sum
+        for ob in xrange(len(emit_matrix[st])):
+            emit_matrix[st][ob] = emit_matrix[st][ob] - log_sum
     
+#    for tag in emit_matrix:
+#        log_sum = NEG_INF
+#        for w in emit_matrix[tag]:
+#            log_sum = log_add(log_sum, emit_matrix[tag][w])
+#        
+#        for w in emit_matrix[tag]:
+#            emit_matrix[tag][w] = emit_matrix[tag][w] - log_sum
+#    
     # viterbi
     tag_seq = hmm_model.viterbi(tokens)
     # print tag_seq
