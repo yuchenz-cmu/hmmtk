@@ -6,7 +6,8 @@
 import sys
 import pickle
 import math
-from hmmtk import hmm
+import hotshot, hotshot.stats
+from hmmtk import hmm_faster, hmm
 
 INF = float('inf')    # infinity !!!
 NEG_INF = float('-inf')
@@ -43,7 +44,7 @@ def train_unsupervised(train_file, model_file):
         line = line.replace("\r", "")
         tokens = line.split(" ")
         
-        ob_list = list()
+        # ob_list = list()
         for t in tokens:
             last_idx = t.rfind("_")
             curr_word = t[:last_idx]
@@ -54,23 +55,26 @@ def train_unsupervised(train_file, model_file):
             else:
                 vocab[curr_word] += 1
             
-            ob_list.append(curr_word)
+            # ob_list.append(curr_word)
+            all_ob_seqs.append(curr_word)
             
             if (curr_tag not in tags):
                 tags[curr_tag] = 1
             else:
                 tags[curr_tag] += 1
         
-        all_ob_seqs.append(ob_list)
+        # all_ob_seqs.append(ob_list)
 
     
     # initialize HMM with tags as states and words as observations, and randomzied probs
-    train_hmm = hmm.HMM(states = tags.keys(), observations = vocab.keys())
-    train_hmm.randomize_matrices()
+    train_hmm = hmm_faster.HMM(states = tags.keys(), observations = vocab.keys())
+    # train_hmm = hmm.HMM(states = tags.keys(), observations = vocab.keys())
+    train_hmm.randomize_matrices(1123)
     
     # starts training
     # train_hmm.train(ob_list, max_iteration = 1000)
-    train_hmm.train_multiple(all_ob_seqs, max_iteration = 1000)        
+    # train_hmm.train_multiple(all_ob_seqs, max_iteration = 1000)
+    train_hmm.train(all_ob_seqs, max_iteration = 1000, delta = 0.001)        
     
     # get prior for each tag
     total_tags = sum([tags[x] for x in tags])
@@ -78,11 +82,12 @@ def train_unsupervised(train_file, model_file):
         tags[t] = ln(float(tags[t]) / float(total_tags))
     
     fmodel = open(model_file, 'w')
-    hmm_model = (train_hmm.get_states(), 
-                 train_hmm.get_observations(), 
-                 train_hmm.get_initial_matrix(), 
-                 train_hmm.get_transition_matrix(), 
-                 train_hmm.get_emission_matrix())    
+#    hmm_model = (train_hmm.get_states(), 
+#                 train_hmm.get_observations(), 
+#                 train_hmm.get_initial_matrix(), 
+#                 train_hmm.get_transition_matrix(), 
+#                 train_hmm.get_emission_matrix())    
+    hmm_model = train_hmm.get_model_dict()
     
     pickle.dump((hmm_model, tags), fmodel)
     fmodel.close()
@@ -316,7 +321,13 @@ def main():
             train_file = sys.argv[idx + 1]
             model_file = sys.argv[idx + 2]
             # train_supervised(train_file, model_file)
+            
+            # profiling
+            # prof = hotshot.Profile("train.unsupervised.prof")
+            # benchtime, stones = prof.runcall(train_unsupervised, train_file, model_file)
+            # prof.close()
             train_unsupervised(train_file, model_file)
+            
             break
         
         elif (sys.argv[idx].lower() == '--tag'):
@@ -332,7 +343,8 @@ def main():
             fmodel.close()
             
             (st_list, ob_list, Pi, A, B) = hmm_matrices
-            hmm_model = hmm.HMM(st_list, ob_list, Pi, A, B)
+            hmm_model = hmm_faster.HMM(st_list, ob_list, Pi, A, B)
+            # hmm_model = hmm.HMM(st_list, ob_list, Pi, A, B)
             
             tag_file(test_file, hmm_model, prior)
             break
